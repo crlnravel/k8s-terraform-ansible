@@ -1,0 +1,39 @@
+---
+- name: Gather controller IP address
+  hosts: controllers[0]
+  become: false
+  gather_facts: true
+  tasks:
+    - name: Store the IP of the first controller node
+      ansible.builtin.set_fact:
+        controller_node_ip: "{{ ansible_private_ip | default(ansible_default_ipv4.address) }}"
+
+- name: Prepare all nodes
+  hosts: all
+  become: true
+  gather_facts: true
+  roles:
+    - role: common
+      tags: ["common", "prereqs"]
+    - role: container_runtime
+      tags: ["containerd", "runtime"]
+    - role: kube_dependencies
+      tags: ["kubelet", "kubeadm", "kubectl", "deps"]
+
+- name: Initialize Kubernetes Control Plane
+  hosts: controllers[0]
+  become: true
+  gather_facts: false
+  vars:
+    api_server_advertise_address: "{{ hostvars[inventory_hostname]['controller_node_ip'] }}"
+  roles:
+    - role: kube_controller
+      tags: ["controller", "init"]
+
+- name: Join Worker Nodes to the Cluster
+  hosts: workers
+  become: true
+  gather_facts: false
+  roles:
+    - role: kube_worker
+      tags: ['worker', 'join']

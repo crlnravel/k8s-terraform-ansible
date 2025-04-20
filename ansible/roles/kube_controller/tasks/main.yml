@@ -1,0 +1,64 @@
+---
+- name: Kube Controller | Check if cluster is initialized
+  ansible.builtin.stat:
+    path: /etc/kubernetes/admin.conf
+  register: kubeadmin_conf_stat
+
+- name: Kube Controller | Initialize Kubernetes cluster with kubeadm
+  ansible.builtin.command: >
+    kubeadm init
+    --pod-network-cidr={{ pod_network_cidr }}
+    --apiserver-advertise-address={{ api_server_advertise_address }}
+    --kubernetes-version={{ kubernetes_version }}.0
+  when: not kubeadmin_conf_stat.stat.exists
+  register: kubeadm_init_result
+  changed_when: "'Your Kubernetes control-plane has initialized successfully!' in kubeadm_init_result.stdout"
+
+- name: Kube Controller | Debug kubeadm init output
+  ansible.builtin.debug:
+    var: kubeadm_init_result.stdout_lines
+  when: kubeadm_init_result.changed # noqa no-handler
+
+- name: Kube Controller | Get the worker join command token
+  ansible.builtin.command: kubeadm token create --print-join-command
+  register: kubeadm_join_cmd_raw
+  when: kubeadm_init_result.changed or kubeadm_join_command is not defined
+  changed_when: false
+
+- name: Kube Controller | Store worker join command in a fact (on this host)
+  ansible.builtin.set_fact:
+    kubeadm_join_command: "{{ kubeadm_join_cmd_raw.stdout }}"
+  when: kubeadm_join_cmd_raw.stdout is defined # Only set fact if command returned output
+
+- name: Kube Controller | Create .kube directory for the ansible user
+  ansible.builtin.file:
+    path: "/home/{{ ansible_user }}/.kube"
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0750"
+  when: kubeadm_init_result.changed # noqa no-handler
+
+- name: Kube Controller | Copy admin.conf to user's .kube dir
+  ansible.builtin.copy:
+    src: /etc/kubernetes/admin.conf
+    dest: "/home/{{ ansible_user }}/.kube/config"
+    remote_src: true
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0600"
+  when: kubeadm_init_result.changed or not kubeadmin_conf_stat.stat.exists
+
+- name: Kube Controller | Check if CNI (calico) is already applied
+  ansible.builtin.command: "kubectl --kubeconfig=/etc/kubernetes/admin.conf get daemonset calico-node -n kube-system"
+  register: calico_check
+  changed_when: false
+  failed_when: false
+  when: kubeadmin_conf_stat.stat.exists or kubeadm_init_result.changed
+
+- name: Kube Controller | Apply CNI manifest ({{ cni_name | default('Calico') }})
+  ansible.builtin.command: "kubectl --kubeconfig=/etc/kubernetes/admin.conf apply -f {{ cni_manifest_url }}"
+  when:
+    - (kubeadmin_conf_stat.stat.exists or kubeadm_init_result.changed)
+    - calico_check.rc != 0 or ('calico-node' not in calico_check.stdout)
+  changed_when: true

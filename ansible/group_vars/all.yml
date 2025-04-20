@@ -1,0 +1,7 @@
+---
+kubernetes_version: "1.29"
+pod_network_cidr: "192.168.0.0/16"
+cni_name: "Calico"
+cni_manifest_url: "https://raw.githubusercontent.com/projectcalico/calico/v3.27.2/manifests/calico.yaml"
+
+ansible_user: ubuntu

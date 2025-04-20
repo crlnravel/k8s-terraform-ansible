@@ -1,0 +1,58 @@
+---
+- name: Kube Deps | Define Kubernetes apt key URL based on version
+  ansible.builtin.set_fact:
+    kubernetes_apt_key_url: >-
+      {% if kubernetes_version is version('1.28', '>=') %}
+      https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_version }}/deb/Release.key
+      {% else %}
+      https://packages.cloud.google.com/apt/doc/apt-key.gpg
+      {% endif %}
+    kubernetes_apt_repo: >-
+      {% if kubernetes_version is version('1.28', '>=') %}
+      deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_version }}/deb/ /
+      {% else %}
+      deb https://apt.kubernetes.io/ kubernetes-xenial main
+      {% endif %}
+  run_once: true
+
+- name: Kube Deps | Download Kubernetes APT key
+  ansible.builtin.get_url:
+    url: "{{ kubernetes_apt_key_url }}"
+    dest: /tmp/kubernetes-release.key
+    mode: '0644'
+
+- name: Kube Deps | Convert and store GPG key
+  ansible.builtin.command:
+    gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg /tmp/kubernetes-release.key
+  args:
+    creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+- name: Kube Deps | Change permission
+  ansible.builtin.file:
+    dest: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+    state: 'file'
+    mode: '0644'
+
+- name: Kube Deps | Add Kubernetes apt repository
+  ansible.builtin.apt_repository:
+    repo: "{{ kubernetes_apt_repo }}"
+    state: present
+    filename: kubernetes
+
+- name: Kube Deps | Install kubelet, kubeadm, kubectl
+  ansible.builtin.apt:
+    name:
+      - kubelet
+      - kubeadm
+      - kubectl
+    state: present
+    update_cache: true
+
+- name: Kube Deps | Hold Kubernetes packages
+  ansible.builtin.dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop:
+    - kubelet
+    - kubeadm
+    - kubectl

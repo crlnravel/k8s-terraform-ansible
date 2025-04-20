@@ -1,0 +1,64 @@
+---
+- name: Container Runtime | Add Docker GPG key
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/ubuntu/gpg
+    dest: /etc/apt/keyrings/docker.asc
+    mode: "0644"
+    force: true
+
+- name: Container Runtime | Add Docker apt repository
+  ansible.builtin.apt_repository:
+    repo:
+      "deb [arch={{ ansible_architecture | replace('x86_64', 'amd64') }} signed-by=/etc/apt/keyrings/docker.asc]
+      https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+    state: present
+    filename: docker
+    update_cache: true
+
+- name: Container Runtime | Install containerd
+  ansible.builtin.apt:
+    name: containerd.io
+    state: present
+    update_cache: true
+
+- name: Container Runtime | Define desired sandbox image based on K8s version
+  ansible.builtin.set_fact:
+    desired_sandbox_image: "{{ 'registry.k8s.io/pause:3.9' if kubernetes_version is version('1.28', '>=') else 'registry.k8s.io/pause:3.6' }}"
+
+- name: Container Runtime | Ensure containerd config file exists (from default)
+  ansible.builtin.command: containerd config default
+  register: containerd_default_config
+  changed_when: false # This command just retrieves data
+  check_mode: false # Always run command even in check mode to get defaults
+
+- name: Container Runtime | Copy containerd config from default if not present
+  ansible.builtin.copy:
+    content: "{{ containerd_default_config.stdout }}"
+    dest: /etc/containerd/config.toml
+    mode: "0644"
+    force: true
+  notify: Restart containerd # Notify if created
+
+- name: Container Runtime | Ensure SystemdCgroup is enabled in containerd config
+  ansible.builtin.lineinfile:
+    path: /etc/containerd/config.toml
+    regexp: '^(\s*)SystemdCgroup\s*=\s*false' # Match line setting it to false
+    line: '\1SystemdCgroup = true' # Replace with true, preserving leading whitespace
+    backrefs: true
+  notify: Restart containerd # Notify if changed
+
+- name: Container Runtime | Ensure correct sandbox_image is set under [plugins."io.containerd.grpc.v1.cri"]
+  ansible.builtin.lineinfile:
+    path: /etc/containerd/config.toml
+    # Match existing sandbox_image line or the section header if line doesn't exist
+    regexp: '^(\s*)sandbox_image\s*='
+    line: '\1sandbox_image = "{{ desired_sandbox_image }}"'
+    insertafter: '\[plugins."io.containerd.grpc.v1.cri"\]' # Add after section if regexp doesn't match
+    backrefs: true
+  notify: Restart containerd # Notify if changed
+
+- name: Container Runtime | Ensure containerd service is enabled and started
+  ansible.builtin.systemd:
+    name: containerd
+    state: started
+    enabled: true

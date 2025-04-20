@@ -1,0 +1,21 @@
+---
+- name: Kube Worker | Check if node is already joined
+  ansible.builtin.stat:
+    path: /etc/kubernetes/kubelet.conf
+  register: kubelet_conf_stat
+
+- name: Kube Worker | Join worker node to the cluster
+  vars:
+    controller_host: "{{ groups['controllers'][0] }}"
+    join_command: "{{ hostvars[controller_host]['kubeadm_join_command'] | default(omit) }}"
+  ansible.builtin.command: "{{ join_command }}"
+  when:
+    - not kubelet_conf_stat.stat.exists
+    - join_command is defined
+  register: kubeadm_join_result
+  changed_when: "'This node has joined the cluster' in kubeadm_join_result.stdout"
+
+- name: Kube Worker | Debug kubeadm join output
+  ansible.builtin.debug:
+    var: kubeadm_join_result.stdout_lines
+  when: kubeadm_join_result.changed  # noqa no-handler
